@@ -74,7 +74,7 @@ def guess(request, game_id, letter:str):
     elif letter not in "abcdefghijklmnopqrstuvwxyz":
         raise UnprocessableEntity(f"Invalid letter: {letter}")
     elif games[game_id]["state"] != "playing":
-        raise UnprocessableEntity(f"Game over. You {games[game_id]["state"]}!")
+        raise UnprocessableEntity(f"Game over. You {games[game_id]['state']}!")
     elif letter in games[game_id]["guessed_letters"]:
         raise UnprocessableEntity(f"Letter already guessed: {letter}")
     elif letter not in games[game_id]["word"].lower():
