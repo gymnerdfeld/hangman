@@ -3,4 +3,4 @@
 Das API (`hangman_api.py`) ist fertig. Was noch fehlt ist ein passendes Front-End.
 
 
-![Hangman](hangman.png)
+![Hangman](image_6.png)
