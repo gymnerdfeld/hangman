@@ -1,0 +1,111 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Hangman</title>
+    <style>
+        html {
+            font-family: sans-serif;
+        }
+        .letters {
+            font-family: monospace;
+            font-size: 300%;
+            font-weight: bold;
+        }
+        button.letter {
+            margin-right: 0.2em;
+            width: 1.5em;
+            height: 1.5em;
+        }
+        button {
+            font-size: 130%;
+        }
+
+    </style>
+</head>
+<body>
+    <h1>Hangman</h1>
+    
+    <div id="app">
+        <span class="letters" v-for="letter of state.word">{{letter}}&nbsp;</span>
+        <br>
+        <img v-bind:src="'image_' + state.wrong_guesses + '.png'">
+        <br>
+        <button class="letter" 
+            v-for="letter of 'abcdefghijklmnopqrstuvwxyz'"
+            v-bind:disabled="state.guessed.indexOf(letter) !== -1 || state.game_over"
+            v-on:click="guess_letter(letter)"
+        >{{letter}}</button>
+
+        <p>
+            <button v-if="state.game_over" v-on:click="new_game()">Neues Spiel</button>
+        </p>
+    </div>
+
+    <script type="module">
+        import {createApp, reactive} from "https://unpkg.com/vue@3/dist/vue.esm-browser.js"
+        import axios from 'https://cdn.skypack.dev/axios'
+
+        function setup() {
+            var state = reactive({
+                "game_id": 0,
+                "wrong_guesses": 0,
+                "guessed": [],//["a", "x"],
+                "word": [],
+                "game_over": false,
+            })
+
+            async function new_game() {
+                if (state.game_id !== 0) {
+                    try {
+                        await axios.delete("/api/hangman/" + state.game_id)
+                    } catch (e) {}
+                }
+                var response = await axios.post("/api/hangman/")
+                state.game_id = response.data.game_id
+                state.word = Array(response.data.word_length).fill("_")
+                state.wrong_guesses = 0
+                state.guessed = []
+                state.game_over = false
+            }
+            new_game()
+            
+            async function guess_letter(letter) {
+                try {
+                    var response = await axios.put("/api/hangman/" + state.game_id, {"letter": letter})
+                    state.guessed.push(letter)
+
+                    var {letter_found, positions} = response.data
+                    if (letter_found) {
+                        for (var index of positions) {
+                            state.word[index] = letter
+                        }
+                    } else {
+                        state.wrong_guesses += 1
+                    }
+                } catch (error) {
+                    // should not happen
+                }
+                if (state.word.indexOf("_") === -1) {
+                    state.game_over = true
+                }
+                if (state.wrong_guesses >= 6) {
+                    state.game_over = true
+                }
+
+
+            }
+
+            return {
+                "state": state,
+                "new_game": new_game,
+                "guess_letter": guess_letter,
+            }
+        }
+
+        var app = createApp({"setup": setup})
+        app.mount("#app")
+    </script>
+</body>
+</html>
