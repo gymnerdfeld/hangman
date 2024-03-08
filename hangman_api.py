@@ -43,7 +43,7 @@ games = {}
 max_guesses = 6
 
 @api.POST("/api/hangman/")
-def new_game(request):
+def new_game():
     done = False
     while not done:
         game_id = random.randrange(100_000_000)
@@ -63,8 +63,8 @@ def new_game(request):
         "guesses_left": max_guesses,
     }
     
-@api.PUT("/api/hangman/<int:game_id>")
-def guess(request, game_id, letter:str):
+@api.PUT("/api/hangman/{game_id:int}")
+def guess(game_id, letter:str):
     letter = letter.lower()
 
     if game_id not in games:
@@ -103,8 +103,8 @@ def guess(request, game_id, letter:str):
             "positions": positions,
         }
     
-@api.DELETE("/api/hangman/<int:game_id>")
-def delete_game(request, game_id):
+@api.DELETE("/api/hangman/{game_id:int}")
+def delete_game(game_id):
     if game_id not in games:
         raise NotFound(f"Game not found: {game_id}")
     del games[game_id]

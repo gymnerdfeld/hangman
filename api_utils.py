@@ -5,6 +5,7 @@ import inspect
 import itertools
 import json
 import queue
+import re
 import sys
 import threading
 import traceback
@@ -81,15 +82,15 @@ class API:
     def __init__(self):
         self._url_map = werkzeug.routing.Map()
 
-    def route(self, string, methods=("GET",), func=None):
+    def register(self, method, url, func=None):
         """Register a route with a callback.
         This function can be used either directly:
         >>> api = API()
-        >>> api.route("/", func=lambda request: "Hello!")  # doctest: +ELLIPSIS
+        >>> api.register("GET", "/", func=lambda request: "Hello!")  # doctest: +ELLIPSIS
         <function <lambda> at 0x...>
 
         or as a decorator
-        >>> @api.route("/user/<id>")
+        >>> @api.register("GET", "/user/<id>")
         ... def home(request, id):
         ...     return f"Welcome home {id}!"
         ...
@@ -109,9 +110,14 @@ class API:
         'Welcome home 007!'
         """
         if func is None:
-            return functools.partial(self.route, string, methods)
+            return functools.partial(self.register, method, url)
 
-        rule = werkzeug.routing.Rule(string, methods=methods)
+        for orig, contents in re.findall(r"(\{([^\}\{]+)\})", url):
+            if ":" in contents:
+                contents = ":".join(reversed(contents.split(":")))
+            url = url.replace(orig, f"<{contents}>")
+
+        rule = werkzeug.routing.Rule(url, methods=(method,))
         werkzeug.routing.Map([rule])  # Bind rule temporarily
         url_params = rule.arguments
 
@@ -119,9 +125,16 @@ class API:
         params = sig.parameters
         param_keys = list(sig.parameters.keys())
 
-        # The first argument is the request, after that, the route parameters follow
+        # The first argument can optionally be the request object, after that,
+        # the url parameters follow
         # The order of the parameters is ignored
-        func_url_params = set(param_keys[1:len(url_params) + 1])
+        if param_keys and param_keys[0] == "request":
+            func_url_params = set(param_keys[1:len(url_params) + 1])
+            body_params = param_keys[len(url_params) + 1:]
+        else:
+            func_url_params = set(param_keys[:len(url_params)])
+            body_params = param_keys[len(url_params):]
+
         missmatch = url_params ^ func_url_params
         if missmatch:
             raise TypeError(
@@ -129,7 +142,6 @@ class API:
                 f"({func_url_params} != {url_params})"
             )
 
-        body_params = param_keys[len(url_params) + 1:]
         body_type = None
         if len(body_params) == 1 and body_params[0] == "data":
             body_type = (
@@ -147,12 +159,14 @@ class API:
             }
 
         if body_type:
-            func = _parse_json_body_wrapper(func, body_type, content_types)
+            wrapped_func = _parse_json_body_wrapper(func, body_type, content_types)
+        else:
+            wrapped_func = _simple_wrapper(func)
 
-        self._url_map.add(werkzeug.routing.Rule(string, methods=methods, endpoint=func))
+        self._url_map.add(werkzeug.routing.Rule(url, methods=(method,), endpoint=wrapped_func))
         return func
 
-    def GET(self, string):
+    def GET(self, url):
         """Shorthand for registering GET requests.
         Use as a decorator:
         >>> api = API()
@@ -165,23 +179,23 @@ class API:
         >>> client.get("/admin")
         <TestResponse streamed [200 OK]>
         """
-        return self.route(string, ("GET",))
+        return self.register("GET", url)
 
-    def POST(self, string):
+    def POST(self, url):
         """Shorthand for registering POST requests."""
-        return self.route(string, ("POST",))
+        return self.register("POST", url)
 
-    def PUT(self, string):
+    def PUT(self, url):
         """Shorthand for registering PUT requests."""
-        return self.route(string, ("PUT",))
+        return self.register("PUT", url)
 
-    def PATCH(self, string):
+    def PATCH(self, url):
         """Shorthand for registering PATCH requests."""
-        return self.route(string, ("PATCH",))
+        return self.register("PATCH", url)
 
-    def DELETE(self, string):
+    def DELETE(self, url):
         """Shorthand for registering DELETE requests."""
-        return self.route(string, ("DELETE",))
+        return self.register("DELETE", url)
 
     def __call__(self, environ, start_response):
         try:
@@ -216,6 +230,19 @@ def _json_response(data, status=200):
         data = json.dumps(data, indent=2) + "\n"
         return werkzeug.Response(data, status=status, mimetype="application/json")
 
+def _simple_wrapper(func):
+    sig = inspect.signature(func)
+
+    @functools.wraps(func)
+    def wrapper(request, *args, **kwargs):
+        if sig.parameters and list(sig.parameters.keys())[0] == "request":
+            args = (request,) + args
+        else:
+            if request.data:
+                raise UnsupportedMediaType("No request body allowed")
+        return func(*args, **kwargs)
+
+    return wrapper
 
 def _parse_json_body_wrapper(func, body_type, content_types):  # noqa: C901
     sig = inspect.signature(func)
@@ -235,18 +262,21 @@ def _parse_json_body_wrapper(func, body_type, content_types):  # noqa: C901
         except json.decoder.JSONDecodeError:
             raise UnsupportedMediaType("Cannot parse request body: invalid JSON")
 
-        if not isinstance(data, body_type):
+        if body_type is not None and not isinstance(data, body_type):
             raise UnprocessableEntity(
                 f"Invalid data format: {body_type.__name__} expected"
             )
 
+        if sig.parameters and list(sig.parameters.keys())[0] == "request":
+            args = (request,) + args
+
         if body_type == dict and content_types:
-            too_many = data.keys() - sig.parameters.keys()
+            too_many = data.keys() - (sig.parameters.keys() - kwargs.keys())
             if too_many:
                 raise UnprocessableEntity(f"Key not allowed: {', '.join(too_many)}")
 
             kwargs.update(data)
-            bound = sig.bind_partial(request, *args, **kwargs)
+            bound = sig.bind_partial(*args, **kwargs)
             bound.apply_defaults()
 
             missing = sig.parameters.keys() - bound.arguments.keys()
@@ -261,7 +291,7 @@ def _parse_json_body_wrapper(func, body_type, content_types):  # noqa: C901
         else:
             kwargs["data"] = data
 
-        return func(request, *args, **kwargs)
+        return func(*args, **kwargs)
 
     return wrapper
 
