@@ -50,18 +50,13 @@
         function setup() {
             var state = reactive({
                 "game_id": 0,
-                "wrong_guesses": 0,
-                "guessed": [],//["a", "x"],
-                "word": [],
+                "wrong_guesses": 0,    // Anzahl falscher Versuche
+                "guessed": [],         // Alle bereits geratenen Buchstaben
+                "word": [],            // Liste mit dem Wort. '_' für noch nicht erratene Buchstaben.
                 "game_over": false,
             })
 
             async function new_game() {
-                if (state.game_id !== 0) {
-                    try {
-                        await axios.delete("/api/hangman/" + state.game_id)
-                    } catch (e) {}
-                }
                 var response = await axios.post("/api/hangman/")
                 state.game_id = response.data.game_id
                 state.word = Array(response.data.word_length).fill("_")
@@ -72,29 +67,25 @@
             new_game()
             
             async function guess_letter(letter) {
-                try {
-                    var response = await axios.put("/api/hangman/" + state.game_id, {"letter": letter})
-                    state.guessed.push(letter)
+                var response = await axios.put("/api/hangman/" + state.game_id, {"letter": letter})
+                var data = response.data   // Vom Server geschickte Daten
 
-                    var {letter_found, positions} = response.data
-                    if (letter_found) {
-                        for (var index of positions) {
-                            state.word[index] = letter
-                        }
-                    } else {
-                        state.wrong_guesses += 1
+                state.guessed.push(letter)
+
+                if (data.letter_found) {
+                    for (var index of data.positions) {
+                        state.word[index] = letter
                     }
-                } catch (error) {
-                    // should not happen
-                }
-                if (state.word.indexOf("_") === -1) {
-                    state.game_over = true
-                }
-                if (state.wrong_guesses >= 6) {
-                    state.game_over = true
+                } else {
+                    state.wrong_guesses += 1
                 }
 
-
+                if (state.word.indexOf("_") === -1) {  // Kein _ mehr gefunden -> gewonnen
+                    state.game_over = true
+                }
+                if (state.wrong_guesses >= 6) {   // Kein Versuch mehr übrig -> verloren
+                    state.game_over = true
+                }
             }
 
             return {
